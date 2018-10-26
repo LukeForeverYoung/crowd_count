@@ -5,12 +5,12 @@ import numpy as np
 import csv
 import math
 import threading
+from multiprocessing import Process,Pool
 
-
-filter_size=40
+filter_size=15
 beta=0.3
 padding=int(filter_size/2)
-k_close=5
+k_close=7
 
 
 def getGaussianFilter(size,sigma):
@@ -45,59 +45,69 @@ def kCloseMean(points,index,k):
         return 1
     return dMean*1.0/count
 
+def floor_div4(v):
+    return math.floor(math.floor(v/2)/2)
 
-def solve(pName,dName,number):
+
+def solve(pName,dName,index):
     path = 'data/ShanghaiTech/' + pName + '/' + dName + '/'
-    for i in range(45, number + 1):
-        #print(path + 'images/IMG_' + str(i) + '.jpg')
-        image = Image.open(path + 'images/IMG_' + str(i) + '.jpg')
-        [w, h] = image.size
-        with open(path + 'ground-truth/GT_IMG_' + str(i) + '.csv') as f:
-            reader = csv.reader(f)
-            data = list(reader)
-            number = int(data[0][0])
-            points = [[float(p[0]), float(p[1])] for p in data[1:]]
-            H_map = np.zeros((h + padding * 2, w + padding * 2))#原密度图先加入padding
-            for i, point in enumerate(points):
-                # print(i)
-                y = int(point[1])
-                x = int(point[0])
-                sigma = beta * kCloseMean(points.copy(), i, k_close)
+    image = Image.open(path + 'images/IMG_' + str(index) + '.jpg')
+    [w, h] = image.size
+    with open(path + 'ground-truth/GT_IMG_' + str(index) + '.csv') as f:
+        reader = csv.reader(f)
+        data = list(reader)
+        number = int(data[0][0])
+        points = [[float(p[0])/4,float(p[1])/4] for p in data[1:]]
+        nw=floor_div4(w)
+        nh=floor_div4(h)
+        #print(nw,nh)
+        H_map = np.zeros((nh + padding * 2, nw + padding * 2))#原密度图先加入padding
+        for j, point in enumerate(points):
+            # print(i)
+            y = int(point[1])
+            x = int(point[0])
+            sigma = beta * kCloseMean(points.copy(), j, k_close)
 
-                # print(sigma)
-                gaussian = getGaussianFilter(filter_size, sigma)
-                #对于越界的区域,计算其有效值
-                sum = 0.0
-                for yy in range(filter_size):
-                    for xx in range(filter_size):
-                        if (yy + y >= padding and yy + y < padding + h and xx + x >= padding and xx + x < padding + w):
-                            sum = sum + gaussian[yy, xx]
-                #处以有效值所占比例就可以让切割后的区域的积分维持在1,且中心依旧是label定位的点
-                gaussian /= sum
-                H_map[y:y + filter_size, x:x + filter_size] += gaussian[:, :]
-                # print(sigma)
-                # print(gaussian)
-                # print(H_map[y:y+filter_size,x:x+filter_size])
-            H_map = H_map[padding:padding + h, padding:padding + w]
-            print(H_map.sum(),number) #可以验证最终密度图的积分等于人数总数
-            # plt.imshow(H_map)
-            # plt.show()
-            #保存numpy内容至二进制文件中
-            #np.save(path + 'ground-truth/Hot_IMG_' + str(i) + '.npy', H_map)
-            #print('ok', path + 'ground-truth/Hot_IMG_' + str(i) + '.npy')
+            #print(sigma)
+            gaussian = getGaussianFilter(filter_size, sigma)
+            #对于越界的区域,计算其有效值
+            sum = 0.0
+            for yy in range(filter_size):
+                for xx in range(filter_size):
+                    if (yy + y >= padding and yy + y < padding + nh and xx + x >= padding and xx + x < padding + nw):
+                        sum = sum + gaussian[yy, xx]
+            #处以有效值所占比例就可以让切割后的区域的积分维持在1,且中心依旧是label定位的点
+            gaussian /= sum
+            H_map[y:y + filter_size, x:x + filter_size] += gaussian[:, :]
+            # print(sigma)
+            # print(gaussian)
+            # print(H_map[y:y+filter_size,x:x+filter_size])
+        H_map = H_map[padding:padding + nh, padding:padding + nw]
+        #print(H_map.sum(),number) #可以验证最终密度图的积分等于人数总数
+        #plt.imshow(H_map)
+        #plt.show()
+        #保存numpy内容至二进制文件中
+        np.save(path + 'ground-truth/Hot_IMG_' + str(index) + '.npy', H_map)
+        print('ok', path + 'ground-truth/Hot_IMG_' + str(index) + '.npy')
 
 
 
+if __name__ =='__main__':#进程不能共用内存
+    dirName = [['part_A', 'part_B'], ['train_data', 'test_data']]
+    imageNumber = [300, 182, 400, 316]
 
-dirName=[['part_A','part_B'],['train_data','test_data']]
-imageNumber=[300,182,400,316]
+    dirIndex = 0
+    process = Pool(5)
+    for pName in dirName[0]:
+        for dName in dirName[1]:
+            for i in range(1,imageNumber[dirIndex]+1):
+                #print(i)
+                process.apply_async(func=solve, args=(pName, dName, i))
+                #solve(pName,dName,i)
+            dirIndex += 1
+    process.close()
+    process.join()
 
-dirIndex=0
-for pName in dirName[0]:
-    for dName in dirName[1]:
-        number=imageNumber[dirIndex]
-        thread = threading.Thread(target=solve,args=(pName,dName,300))
-        thread.start()
-        dirIndex+=1
+    print("Finish")
 
 
